@@ -69,7 +69,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'reports', label: 'Reports', icon: FileText, route: '/reports' },
   {
     id: 'last-mile',
-    label: 'LAST-MILE',
+    label: 'AlertSetu',
     icon: Siren,
     route: '/last-mile',
     isEmergency: true,

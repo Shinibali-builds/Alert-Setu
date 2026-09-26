@@ -32,14 +32,14 @@ import {
   Radio,
   HeartHandshake,
   AlertTriangle,
-  Layers,
   Cpu,
   ShieldCheck,
   CheckCircle2,
-  FileCheck,
-  Languages,
-  RotateCw,
+  MapPin,
+  Clock3,
 } from 'lucide-react';
+
+const COMMUNITY_NOTE_KEY = 'alertsetu-community-note-v1';
 
 export function AlertSetuPage() {
   const [selectedAlertId, setSelectedAlertId] = useState<string>(SAMPLE_ALERTS[0]?.id ?? '');
@@ -50,7 +50,13 @@ export function AlertSetuPage() {
   const [lowBandwidth, setLowBandwidth] = useState<boolean>(true);
   const [visualMode, setVisualMode] = useState<boolean>(true);
   const [offlineMode, setOfflineMode] = useState<boolean>(false);
-  const [communityNote, setCommunityNote] = useState<string>('');
+  const [communityNote, setCommunityNote] = useState<string>(() => {
+    try {
+      return localStorage.getItem(COMMUNITY_NOTE_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
   const [receipts, setReceipts] = useState<DeliveryReceipt[]>(() => loadReceipts());
   const [sending, setSending] = useState<boolean>(false);
   const [activeToast, setActiveToast] = useState<string | null>(null);
@@ -61,10 +67,19 @@ export function AlertSetuPage() {
     return () => clearTimeout(t);
   }, []);
 
-  // Save receipts to localStorage whenever updated
+  // Save receipts to localStorage
   useEffect(() => {
     saveReceipts(receipts);
   }, [receipts]);
+
+  // Save community notes to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(COMMUNITY_NOTE_KEY, communityNote);
+    } catch {
+      // localStorage may be disabled
+    }
+  }, [communityNote]);
 
   const activeAlert: OfficialEmergencyAlert = useMemo(() => {
     return SAMPLE_ALERTS.find((a) => a.id === selectedAlertId) || SAMPLE_ALERTS[0];
@@ -78,23 +93,77 @@ export function AlertSetuPage() {
     return encodeLowBandwidthPayload(activeAlert, translation, !lowBandwidth);
   }, [activeAlert, translation, lowBandwidth]);
 
-  // Delivery simulation with deterministic asynchronous state progression
+  // Synchronize queued packets when offlineMode is turned off
+  const handleToggleOfflineMode = useCallback(() => {
+    setOfflineMode((prev) => {
+      const willBeOnline = prev; // if prev was true, now it will be false (online)
+      if (willBeOnline) {
+        // Gateway back online: sync any queued transmissions
+        setReceipts((current) => {
+          const queuedIds = current.filter((r) => r.status === 'queued').map((r) => r.id);
+          if (queuedIds.length > 0) {
+            showToast(`Gateway restored online. Synchronizing ${queuedIds.length} queued packet(s)...`);
+            setTimeout(() => {
+              setReceipts((curr) =>
+                curr.map((r) => (queuedIds.includes(r.id) ? { ...r, status: 'syncing' } : r))
+              );
+            }, 350);
+            setTimeout(() => {
+              setReceipts((curr) =>
+                curr.map((r) =>
+                  queuedIds.includes(r.id)
+                    ? { ...r, status: 'sent', sentAt: new Date().toISOString() }
+                    : r
+                )
+              );
+            }, 750);
+            setTimeout(() => {
+              setReceipts((curr) =>
+                curr.map((r) =>
+                  queuedIds.includes(r.id)
+                    ? { ...r, status: 'delivered', deliveredAt: new Date().toISOString(), errorMessage: undefined }
+                    : r
+                )
+              );
+              showToast('Queued emergency packets successfully synced and delivered');
+            }, 1400);
+          } else {
+            showToast('Gateway restored online (Direct Sync)');
+          }
+          return current;
+        });
+      } else {
+        showToast('Offline Mode active: New packets will be buffered locally');
+      }
+      return !prev;
+    });
+  }, [showToast]);
+
+  // Delivery simulation with deterministic state machine
   const handleSimulateDelivery = useCallback(
-    (channel: DeliveryMode, targets: string[]) => {
+    (channel: DeliveryMode, targets: string[], shouldFail = false) => {
       if (sending) return;
 
       const created = createReceipts(activeAlert, channel, targets, bandwidthPacket.bytes);
       const activeReceipts = created.map((r) => ({
         ...r,
         status: 'queued' as const,
+        errorMessage: offlineMode ? 'Queued locally in edge buffer (Gateway Offline)' : undefined,
       }));
 
       setReceipts((prev) => [...activeReceipts, ...prev].slice(0, 100));
-      setSending(true);
       setPipelineStep(4); // Stage 5: Delivery
-      showToast(`Transmission queued for ${targets.length} target node(s)`);
 
-      // Progress through state machine: QUEUED -> SYNCING -> SENT -> DELIVERED
+      // If offline mode is ON: keep packet strictly in QUEUED state!
+      if (offlineMode) {
+        showToast(`Packet buffered locally in edge queue for ${targets.length} node(s) (Offline)`);
+        return;
+      }
+
+      setSending(true);
+      showToast(shouldFail ? 'Testing failure handling...' : `Transmission queued for ${targets.length} target node(s)`);
+
+      // Progress: QUEUED -> SYNCING
       setTimeout(() => {
         setReceipts((current) =>
           current.map((r) =>
@@ -103,6 +172,27 @@ export function AlertSetuPage() {
         );
       }, 350);
 
+      if (shouldFail) {
+        // Failure simulation: SYNCING -> FAILED
+        setTimeout(() => {
+          setReceipts((current) =>
+            current.map((r) =>
+              activeReceipts.some((ar) => ar.id === r.id)
+                ? {
+                    ...r,
+                    status: 'failed',
+                    errorMessage: 'Carrier Tower Timeout: Handshake packet unacknowledged (Simulated Failure)',
+                  }
+                : r
+            )
+          );
+          setSending(false);
+          showToast('Simulated transmission failure recorded');
+        }, 800);
+        return;
+      }
+
+      // Normal path: SYNCING -> SENT -> DELIVERED
       setTimeout(() => {
         setReceipts((current) =>
           current.map((r) =>
@@ -125,10 +215,10 @@ export function AlertSetuPage() {
         showToast('Emergency packet delivered to endpoint');
       }, 1400);
     },
-    [activeAlert, bandwidthPacket.bytes, sending, showToast]
+    [activeAlert, bandwidthPacket.bytes, offlineMode, sending, showToast]
   );
 
-  // Acknowledge receipt
+  // Acknowledge receipt: DELIVERED -> ACKNOWLEDGED
   const handleAcknowledge = useCallback((receiptId: string) => {
     setReceipts((current) =>
       current.map((r) =>
@@ -145,7 +235,7 @@ export function AlertSetuPage() {
     showToast('Acknowledgement recorded and timestamped');
   }, [showToast]);
 
-  // Retry failed delivery
+  // Retry failed delivery: FAILED -> QUEUED -> SYNCING -> SENT -> DELIVERED
   const handleRetry = useCallback((receiptId: string) => {
     setReceipts((current) =>
       current.map((r) =>
@@ -153,21 +243,40 @@ export function AlertSetuPage() {
           ? {
               ...r,
               status: 'queued',
+              errorMessage: undefined,
               retryCount: (r.retryCount || 0) + 1,
             }
           : r
       )
     );
-    showToast('Scheduled retry for delivery packet');
+    showToast('Retry initialized: Transitioning through state machine...');
+
+    setTimeout(() => {
+      setReceipts((current) =>
+        current.map((r) => (r.id === receiptId ? { ...r, status: 'syncing' } : r))
+      );
+    }, 350);
+
     setTimeout(() => {
       setReceipts((current) =>
         current.map((r) =>
           r.id === receiptId
-            ? { ...r, status: 'delivered', deliveredAt: new Date().toISOString() }
+            ? { ...r, status: 'sent', sentAt: new Date().toISOString() }
             : r
         )
       );
-    }, 1000);
+    }, 750);
+
+    setTimeout(() => {
+      setReceipts((current) =>
+        current.map((r) =>
+          r.id === receiptId
+            ? { ...r, status: 'delivered', deliveredAt: new Date().toISOString(), errorMessage: undefined }
+            : r
+        )
+      );
+      showToast('Retried delivery completed successfully');
+    }, 1400);
   }, [showToast]);
 
   const handleClearReceipts = useCallback(() => {
@@ -177,7 +286,7 @@ export function AlertSetuPage() {
   }, [showToast]);
 
   return (
-    <div className="space-y-8 pb-16 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div className="space-y-6 pb-16 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       {/* Toast Notification */}
       {activeToast && (
         <div
@@ -190,121 +299,63 @@ export function AlertSetuPage() {
         </div>
       )}
 
-      {/* 1. ALERTSETU MASTHEAD */}
-      <section className="glass-panel-accent rounded-3xl p-6 sm:p-8 md:p-10 border border-slate-700/60 shadow-2xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-96 h-96 bg-rose-500/10 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20" />
-        <div className="absolute bottom-0 left-0 w-80 h-80 bg-teal-500/10 rounded-full blur-3xl pointer-events-none -ml-20 -mb-20" />
-
-        <div className="relative z-10 flex flex-col lg:flex-row lg:items-end justify-between gap-6">
-          <div className="max-w-3xl">
-            <div className="flex flex-wrap items-center gap-2.5 mb-3">
+      {/* 1. COMPACT COMMAND-CENTER HERO */}
+      <section className="glass-panel rounded-3xl p-5 md:p-6 border border-slate-700/60 shadow-xl relative overflow-hidden">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+          <div className="max-w-2xl">
+            <div className="flex flex-wrap items-center gap-2 mb-2">
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-bold tracking-widest bg-rose-500/20 text-rose-300 border border-rose-500/40 uppercase">
-                <Siren className="w-3.5 h-3.5 animate-pulse" />
+                <Siren className="w-3.5 h-3.5" />
                 ALERTSETU
               </span>
               <span className="text-xs font-mono text-slate-400">
-                MODULE v2.6 • MAUSAM ECOSYSTEM
-              </span>
-              <span className="hidden sm:inline-flex items-center gap-1 text-xs px-2.5 py-0.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                SYSTEM READY
+                LAST-MILE EMERGENCY INTELLIGENCE
               </span>
             </div>
 
-            <h1 className="text-3xl sm:text-4xl md:text-5xl font-black tracking-tight text-white leading-tight">
-              LAST-MILE EMERGENCY INTELLIGENCE
+            <h1 className="text-2xl sm:text-3xl md:text-4xl font-black tracking-tight text-white leading-tight">
+              Last-Mile Emergency Intelligence
             </h1>
 
-            <p className="mt-3 text-sm sm:text-base text-slate-300 leading-relaxed font-normal">
+            <p className="mt-2 text-xs sm:text-sm text-slate-300 leading-relaxed font-normal">
               Turn official warnings into clear, multilingual, visual and low-bandwidth actions.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            <ProvenanceBadge type="SAMPLE / SYNTHETIC DATA" />
-            <ProvenanceBadge type="DEMO TELEMETRY" />
-            <button
-              type="button"
-              onClick={() => {
-                setOfflineMode((v) => !v);
-                showToast(offlineMode ? 'Network restored' : 'Offline simulation active');
-              }}
-              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border transition-all ${
-                offlineMode
-                  ? 'border-amber-500/60 bg-amber-500/20 text-amber-300'
-                  : 'border-slate-700 bg-slate-900 text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {offlineMode ? (
-                <>
-                  <WifiOff className="w-3.5 h-3.5" />
-                  <span>OFFLINE MODE</span>
-                </>
-              ) : (
-                <>
-                  <Wifi className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>ONLINE RELAY</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
+          {/* Right: Active Alert Snapshot */}
+          <div className="shrink-0 p-3.5 rounded-2xl bg-slate-950/70 border border-slate-800 flex flex-col gap-2 min-w-[280px]">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-mono uppercase text-slate-400">ACTIVE ADVISORY</span>
+              <span
+                className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                  activeAlert.severity === 'RED'
+                    ? 'border-red-500/50 bg-red-500/20 text-red-300'
+                    : 'border-orange-500/50 bg-orange-500/20 text-orange-300'
+                }`}
+              >
+                {activeAlert.severity} ALERT
+              </span>
+            </div>
 
-        {/* Dashboard Top Summary Metrics */}
-        <div className="mt-8 pt-6 border-t border-slate-800/80 grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div className="p-3.5 rounded-2xl bg-slate-950/50 border border-slate-800">
-            <span className="text-[11px] font-mono text-slate-400 uppercase block">ACTIVE ALERTS</span>
-            <span className="text-xl sm:text-2xl font-black text-rose-300 font-mono mt-0.5 block">
-              {SAMPLE_ALERTS.length} BULLETINS
-            </span>
-          </div>
+            <div className="text-sm font-bold text-slate-100 flex items-center gap-1.5">
+              <span>{activeAlert.hazard} Warning</span>
+              <span className="text-xs text-slate-400 font-mono">({activeAlert.id})</span>
+            </div>
 
-          <div className="p-3.5 rounded-2xl bg-slate-950/50 border border-slate-800">
-            <span className="text-[11px] font-mono text-slate-400 uppercase block">TARGETS MONITORED</span>
-            <span className="text-xl sm:text-2xl font-black text-slate-100 font-mono mt-0.5 block">
-              {Math.max(receipts.length, 12)} NODES
-            </span>
-          </div>
+            <div className="text-xs text-slate-400 truncate flex items-center gap-1">
+              <MapPin className="w-3 h-3 text-rose-400 shrink-0" />
+              <span className="truncate">{activeAlert.affectedArea}</span>
+            </div>
 
-          <div className="p-3.5 rounded-2xl bg-slate-950/50 border border-slate-800">
-            <span className="text-[11px] font-mono text-slate-400 uppercase block">DELIVERED PACKETS</span>
-            <span className="text-xl sm:text-2xl font-black text-emerald-300 font-mono mt-0.5 block">
-              {receipts.filter((r) => r.status === 'delivered' || r.status === 'acknowledged').length}
-            </span>
-          </div>
-
-          <div className="p-3.5 rounded-2xl bg-slate-950/50 border border-slate-800">
-            <span className="text-[11px] font-mono text-slate-400 uppercase block">ACKNOWLEDGED</span>
-            <span className="text-xl sm:text-2xl font-black text-teal-300 font-mono mt-0.5 block">
-              {receipts.filter((r) => r.status === 'acknowledged').length}
-            </span>
+            <div className="pt-2 border-t border-slate-850 flex items-center justify-between text-[11px]">
+              <span className="text-slate-500">Valid: {activeAlert.validUntil}</span>
+              <ProvenanceBadge type="SAMPLE / SYNTHETIC DATA" />
+            </div>
           </div>
         </div>
       </section>
 
-      {/* 2. OFFICIAL ALERT SELECTOR */}
-      <AlertSourceCard
-        alerts={SAMPLE_ALERTS}
-        selectedAlert={activeAlert}
-        onSelectAlert={(id) => {
-          setSelectedAlertId(id);
-          setPipelineStep(0);
-          showToast(`Switched active advisory to ${id}`);
-        }}
-      />
-
-      {/* 3. TARGET AUDIENCE SELECTOR */}
-      <AudiencePreview
-        alert={activeAlert}
-        audience={audience}
-        onAudienceChange={(aud) => {
-          setAudience(aud);
-          setPipelineStep(1);
-          showToast(`Modulated plain language for: ${aud}`);
-        }}
-      />
-
-      {/* 4. PROCESS FLOW CHART */}
+      {/* 2. PROCESS FLOW PIPELINE */}
       <ProcessFlow
         currentStep={pipelineStep}
         onStepSelect={(step) => {
@@ -312,7 +363,30 @@ export function AlertSetuPage() {
         }}
       />
 
-      {/* 5. LANGUAGE BANK */}
+      {/* 3. ROW 1: OFFICIAL ALERT (LEFT) + AUDIENCE PREVIEW (RIGHT) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <AlertSourceCard
+          alerts={SAMPLE_ALERTS}
+          selectedAlert={activeAlert}
+          onSelectAlert={(id) => {
+            setSelectedAlertId(id);
+            setPipelineStep(0);
+            showToast(`Switched active advisory to ${id}`);
+          }}
+        />
+
+        <AudiencePreview
+          alert={activeAlert}
+          audience={audience}
+          onAudienceChange={(aud) => {
+            setAudience(aud);
+            setPipelineStep(1);
+            showToast(`Modulated plain language for: ${aud}`);
+          }}
+        />
+      </div>
+
+      {/* 4. ROW 2: LANGUAGE BANK */}
       <LanguageBank
         alert={activeAlert}
         selectedLanguage={language}
@@ -323,203 +397,173 @@ export function AlertSetuPage() {
         }}
       />
 
-      {/* 6. VISUAL STUDIO */}
-      <VisualStudio
-        visualMode={visualMode}
-        onToggleVisualMode={() => {
-          setVisualMode((v) => !v);
-          setPipelineStep((prev) => Math.max(prev, 3));
-        }}
-        activeHazard={activeAlert.hazard}
-        activeSeverity={activeAlert.severity}
-      />
+      {/* 5. ROW 3: VISUAL STUDIO (LEFT) + AFFECTED AREA MAP (RIGHT) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <VisualStudio
+          visualMode={visualMode}
+          onToggleVisualMode={() => {
+            setVisualMode((v) => !v);
+            setPipelineStep((prev) => Math.max(prev, 3));
+          }}
+          activeHazard={activeAlert.hazard}
+          activeSeverity={activeAlert.severity}
+          audience={audience}
+        />
 
-      {/* 7. AFFECTED AREA MAP */}
-      <AlertMap alert={activeAlert} />
+        <AlertMap alert={activeAlert} />
+      </div>
 
-      {/* 8. SIMULATED DELIVERY */}
-      <DeliveryPanel
-        alert={activeAlert}
-        language={language}
-        deliveryMode={deliveryMode}
-        onDeliveryModeChange={(mode) => setDeliveryMode(mode)}
-        onSimulateDelivery={handleSimulateDelivery}
-        sending={sending}
-        lowBandwidth={lowBandwidth}
-        onToggleLowBandwidth={() => setLowBandwidth((v) => !v)}
-        offlineMode={offlineMode}
-        onToggleOfflineMode={() => setOfflineMode((v) => !v)}
-      />
+      {/* 6. ROW 4: DELIVERY CONTROL (LEFT) + RECEIPT TRACKER (RIGHT) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <DeliveryPanel
+          alert={activeAlert}
+          language={language}
+          deliveryMode={deliveryMode}
+          onDeliveryModeChange={(mode) => setDeliveryMode(mode)}
+          onSimulateDelivery={handleSimulateDelivery}
+          sending={sending}
+          lowBandwidth={lowBandwidth}
+          onToggleLowBandwidth={() => setLowBandwidth((v) => !v)}
+          offlineMode={offlineMode}
+          onToggleOfflineMode={handleToggleOfflineMode}
+        />
 
-      {/* 9. LOW-BANDWIDTH PACKET */}
-      <section className="glass-panel rounded-3xl p-5 md:p-6" aria-labelledby="low-bw-heading">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5 pb-4 border-b border-slate-800">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-[10px] font-bold tracking-widest text-slate-400 uppercase">
-                09 / LOW-BANDWIDTH PACKET COMPACTOR
-              </span>
-              <ProvenanceBadge type="DERIVED CONTENT" />
+        <ReceiptTracker
+          receipts={receipts}
+          onAcknowledge={handleAcknowledge}
+          onRetry={handleRetry}
+          onClearReceipts={handleClearReceipts}
+        />
+      </div>
+
+      {/* 7. ROW 5: LOW BANDWIDTH (LEFT) + OFFLINE RELAY (RIGHT) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Low-Bandwidth Packet Technical Compactor */}
+        <section className="glass-panel rounded-3xl p-5 md:p-6" aria-labelledby="low-bw-heading">
+          <div className="flex items-center justify-between gap-3 mb-3 pb-3 border-b border-slate-800">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase">
+                  09 / LOW-BANDWIDTH PACKET
+                </span>
+                <ProvenanceBadge type="DERIVED CONTENT" />
+              </div>
+              <h2 id="low-bw-heading" className="text-base font-bold text-slate-100 flex items-center gap-2">
+                <Cpu className="w-4 h-4 text-rose-400" />
+                <span>Compact UTF-8 Telegram</span>
+              </h2>
             </div>
-            <h2 id="low-bw-heading" className="text-xl font-bold text-slate-100 flex items-center gap-2">
-              <Cpu className="w-5 h-5 text-teal-400" />
-              <span>Compact Emergency Data Telegram</span>
-            </h2>
-          </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-mono px-3 py-1.5 rounded-xl border border-teal-500/40 bg-teal-500/10 text-teal-300 font-bold">
+            <div className="text-xs font-mono font-bold px-2.5 py-1 rounded-xl border border-rose-500/40 bg-rose-500/10 text-rose-300">
               {bandwidthPacket.bytes} BYTES
-            </span>
-          </div>
-        </div>
-
-        <p className="text-xs text-slate-400 mb-4">
-          Compresses CAP schema into an ultra-lean JSON object stripped of metadata, guaranteeing rapid delivery across congested 2G networks, SMS payloads, or edge LoRa relays.
-        </p>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2 rounded-2xl bg-slate-950/80 border border-slate-800 p-4">
-            <div className="text-[11px] font-mono text-slate-400 uppercase mb-2 flex items-center justify-between">
-              <span>RAW TELEGRAM PAYLOAD</span>
-              <span className="text-emerald-400 font-bold">{bandwidthPacket.bytes} Bytes</span>
-            </div>
-            <pre className="font-mono text-xs text-teal-300 overflow-x-auto leading-relaxed max-h-56">
-              {bandwidthPacket.text}
-            </pre>
-          </div>
-
-          <div className="rounded-2xl bg-slate-900/40 border border-slate-800 p-4 space-y-3 text-xs">
-            <div className="font-bold text-slate-200 uppercase text-[11px] tracking-wider">
-              Network Efficiency Report
-            </div>
-            <div className="flex justify-between text-slate-400">
-              <span>Payload Size:</span>
-              <span className="font-mono text-emerald-400 font-bold">{bandwidthPacket.bytes} B</span>
-            </div>
-            <div className="flex justify-between text-slate-400">
-              <span>Standard 2G Tx Time:</span>
-              <span className="font-mono text-slate-300">&lt; 0.12 sec</span>
-            </div>
-            <div className="flex justify-between text-slate-400">
-              <span>SMS Character Segments:</span>
-              <span className="font-mono text-slate-300">1 Segment</span>
-            </div>
-            <div className="flex justify-between text-slate-400">
-              <span>Encoding:</span>
-              <span className="font-mono text-slate-300">UTF-8 / TextEncoder</span>
-            </div>
-            <div className="pt-2 border-t border-slate-800 text-[11px] text-slate-500 leading-tight">
-              Calculated using browser-native TextEncoder. Suitable for packet radio, satellite SMS, and low-power mesh radios.
             </div>
           </div>
-        </div>
-      </section>
 
-      {/* 10. OFFLINE RELAY BUFFER */}
-      <section className="glass-panel rounded-3xl p-5 md:p-6" aria-labelledby="offline-relay-heading">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5 pb-4 border-b border-slate-800">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-[10px] font-bold tracking-widest text-slate-400 uppercase">
-                10 / OFFLINE COMMUNITY RELAY
-              </span>
-              <ProvenanceBadge type="DEMO TELEMETRY" />
-            </div>
-            <h2 id="offline-relay-heading" className="text-xl font-bold text-slate-100 flex items-center gap-2">
-              <Radio className="w-5 h-5 text-indigo-400" />
-              <span>Offline Edge Mesh Store & Forward</span>
-            </h2>
+          <pre className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 font-mono text-xs text-slate-300 overflow-x-auto max-h-52 leading-relaxed">
+            {bandwidthPacket.text}
+          </pre>
+
+          <div className="mt-3 text-[11px] text-slate-400 flex items-center justify-between font-mono">
+            <span>Encoding: UTF-8 / TextEncoder</span>
+            <span>2G Delivery Time: &lt;0.12s</span>
           </div>
+        </section>
 
-          <div className="flex items-center gap-2">
-            <span
-              className={`text-xs font-mono font-bold px-3 py-1 rounded-full border ${
+        {/* Offline Relay Buffer (Labeled Simulated Nodes) */}
+        <section className="glass-panel rounded-3xl p-5 md:p-6" aria-labelledby="offline-relay-heading">
+          <div className="flex items-center justify-between gap-3 mb-3 pb-3 border-b border-slate-800">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase">
+                  10 / OFFLINE COMMUNITY RELAY
+                </span>
+                <ProvenanceBadge type="DEMO TELEMETRY" />
+              </div>
+              <h2 id="offline-relay-heading" className="text-base font-bold text-slate-100 flex items-center gap-2">
+                <Radio className="w-4 h-4 text-amber-400" />
+                <span>Edge Store & Forward Mesh</span>
+              </h2>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleToggleOfflineMode}
+              className={`text-xs font-mono font-bold px-3 py-1 rounded-full border transition-all ${
                 offlineMode
-                  ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
-                  : 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
+                  ? 'border-amber-500/50 bg-amber-500/20 text-amber-300'
+                  : 'border-slate-700 bg-slate-900 text-slate-400 hover:text-slate-200'
               }`}
             >
-              {offlineMode ? 'ISOLATED MESH ACTIVE' : 'CLOUD GATEWAY LINKED'}
-            </span>
+              {offlineMode ? 'GATEWAY OFFLINE' : 'GATEWAY ONLINE'}
+            </button>
           </div>
-        </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {[
-            { name: 'Ward Community Relay', status: 'SYNCHRONIZED', count: '142 Households' },
-            { name: 'Cyclone Shelter 4B', status: 'LISTENING', count: '520 Evacuees' },
-            { name: 'District Radio Desk', status: 'BROADCASTING', count: 'FM 102.4 MHz' },
-            { name: 'Volunteer Bike Dispatch', status: 'EN ROUTE', count: 'Handheld Megaphones' },
-          ].map((node) => (
-            <div key={node.name} className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 text-xs">
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-bold text-slate-200">{node.name}</span>
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          <div className="grid grid-cols-2 gap-2.5">
+            {[
+              { name: 'Ward Community Relay', tag: 'SIMULATED NODE', status: 'SYNCHRONIZED' },
+              { name: 'Cyclone Shelter 4B', tag: 'SIMULATED NODE', status: 'STANDBY' },
+              { name: 'District Radio Desk', tag: 'SIMULATED NODE', status: 'LISTENING' },
+              { name: 'Volunteer Bike Dispatch', tag: 'SIMULATED NODE', status: 'READY' },
+            ].map((node) => (
+              <div key={node.name} className="p-3 rounded-2xl bg-slate-900/60 border border-slate-800 text-xs">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-slate-200 truncate">{node.name}</span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                </div>
+                <div className="flex items-center justify-between text-[10px] font-mono">
+                  <span className="text-slate-500">{node.tag}</span>
+                  <span className="text-emerald-400">{node.status}</span>
+                </div>
               </div>
-              <div className="text-emerald-400 font-mono text-[11px] font-semibold">{node.status}</div>
-              <div className="text-slate-400 text-[11px] mt-1">{node.count}</div>
-            </div>
-          ))}
-        </div>
-      </section>
+            ))}
+          </div>
+        </section>
+      </div>
 
-      {/* 11. RECEIPT TRACKER */}
-      <ReceiptTracker
-        receipts={receipts}
-        onAcknowledge={handleAcknowledge}
-        onRetry={handleRetry}
-        onClearReceipts={handleClearReceipts}
-      />
-
-      {/* 12. COMMUNITY RELAY NOTE */}
-      <section className="glass-panel rounded-3xl p-5 md:p-6" aria-labelledby="community-note-heading">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5 pb-4 border-b border-slate-800">
+      {/* 8. ROW 6: COMMUNITY RELAY NOTE (PERSISTENT IN LOCALSTORAGE) */}
+      <section className="glass-panel rounded-3xl p-5 md:p-6 border border-amber-500/30" aria-labelledby="community-note-heading">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3 pb-3 border-b border-amber-500/20">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="text-[10px] font-bold tracking-widest text-slate-400 uppercase">
-                12 / COMMUNITY RELAY NOTE
+              <span className="text-[10px] font-mono font-bold tracking-widest text-amber-400 uppercase">
+                11 / GROUND VOLUNTEER RELAY NOTE
               </span>
               <ProvenanceBadge type="COMMUNITY-GENERATED • NOT OFFICIAL" />
             </div>
-            <h2 id="community-note-heading" className="text-xl font-bold text-slate-100 flex items-center gap-2">
+            <h2 id="community-note-heading" className="text-lg font-bold text-slate-100 flex items-center gap-2">
               <HeartHandshake className="w-5 h-5 text-amber-400" />
               <span>Ground Volunteer Community Notes</span>
             </h2>
           </div>
-          <span className="text-xs text-amber-400/90 font-mono">
+          <span className="text-xs text-amber-300 font-mono">
             Appended Layer • Cannot Mutate Official Alert
           </span>
         </div>
 
-        <div className="space-y-4">
-          <label className="text-xs text-slate-300 block font-semibold">
-            Input Ground Observations or Shelter Directions (e.g. fallen tree locations, open relief kitchen locations):
-          </label>
-
+        <div className="space-y-3">
           <textarea
             value={communityNote}
             onChange={(e) => setCommunityNote(e.target.value)}
-            rows={4}
-            placeholder="e.g. Ward 4 Community Center has clean drinking water and generator power. Avoid Sector 9 underpass due to 3ft standing water."
-            className="w-full rounded-2xl bg-slate-950/70 border border-slate-800 p-4 text-xs md:text-sm text-slate-200 placeholder-slate-600 focus:border-amber-500/50 focus:outline-none focus:ring-1 focus:ring-amber-500/30"
+            rows={3}
+            placeholder="e.g. Ward 4 Community Center has clean drinking water and generator power. Avoid Sector 9 underpass due to standing water."
+            className="w-full rounded-2xl bg-slate-950/70 border border-slate-800 p-3.5 text-xs sm:text-sm text-slate-200 placeholder-slate-600 focus:border-amber-500/50 focus:outline-none focus:ring-1 focus:ring-amber-500/30"
           />
 
-          <div className="flex items-center justify-between text-xs text-slate-400 pt-1">
+          <div className="flex items-center justify-between text-xs text-slate-400">
             <span className="flex items-center gap-1.5 text-amber-300 text-xs font-semibold">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
               COMMUNITY-GENERATED • NOT OFFICIAL
             </span>
-            <span>Character count: {communityNote.length}</span>
+            <span className="font-mono">{communityNote.length} characters • Saved locally</span>
           </div>
 
           {communityNote && (
-            <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-1.5">
+            <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-1">
               <div className="flex items-center gap-2">
                 <ProvenanceBadge type="COMMUNITY-GENERATED • NOT OFFICIAL" />
-                <span className="text-xs text-slate-400">Recorded by Local Relay Operator</span>
+                <span className="text-[11px] text-slate-400">Recorded by Local Ward Volunteer</span>
               </div>
-              <p className="text-xs md:text-sm text-amber-100 font-medium whitespace-pre-wrap leading-relaxed">
+              <p className="text-xs sm:text-sm text-amber-100 whitespace-pre-wrap leading-relaxed">
                 {communityNote}
               </p>
             </div>
@@ -527,81 +571,63 @@ export function AlertSetuPage() {
         </div>
       </section>
 
-      {/* 13. PROVENANCE & SAFETY */}
+      {/* 9. ROW 7: PROVENANCE & SAFETY (COMPACT TAXONOMY GRID) */}
       <section className="glass-panel rounded-3xl p-5 md:p-6" aria-labelledby="provenance-heading">
-        <div className="mb-5 pb-4 border-b border-slate-800">
-          <span className="text-[10px] font-bold tracking-widest text-slate-400 uppercase block mb-1">
-            13 / PROVENANCE SYSTEM & SAFETY AUDIT
+        <div className="mb-4 pb-3 border-b border-slate-800">
+          <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase block mb-1">
+            12 / CONTENT PROVENANCE TAXONOMY
           </span>
-          <h2 id="provenance-heading" className="text-xl font-bold text-slate-100">
-            Emergency Content Provenance Taxonomy
+          <h2 id="provenance-heading" className="text-lg font-bold text-slate-100">
+            Audit Safeguards & Provenance Protocol
           </h2>
-          <p className="text-xs text-slate-400 mt-1">
-            To prevent misinformation and unauthorized mutations during natural hazards, every piece of information is strictly categorized.
-          </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-          <div className="p-4 rounded-2xl bg-emerald-950/20 border border-emerald-500/30 space-y-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1.5">
             <ProvenanceBadge type="OFFICIAL SOURCE CONTENT" />
             <h4 className="text-xs font-bold text-slate-200">Immutable Official Alert</h4>
             <p className="text-[11px] text-slate-400 leading-normal">
-              Direct from meteorological authorities (IMD/CAP). Guaranteed read-only. Cannot be modified by users or downstream engines.
+              Direct from IMD/CAP authorities. Strictly read-only; cannot be altered downstream.
             </p>
           </div>
 
-          <div className="p-4 rounded-2xl bg-indigo-950/20 border border-indigo-500/30 space-y-2">
+          <div className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1.5">
             <ProvenanceBadge type="DERIVED CONTENT" />
             <h4 className="text-xs font-bold text-slate-200">Algorithmic Plain-Language</h4>
             <p className="text-[11px] text-slate-400 leading-normal">
-              Derived for specific literacy groups. Preserves severity, hazard type, and boundary while simplifying phrasing.
+              Modulated for specific literacy groups while preserving hazard severity and action.
             </p>
           </div>
 
-          <div className="p-4 rounded-2xl bg-sky-950/20 border border-sky-500/30 space-y-2">
+          <div className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1.5">
             <ProvenanceBadge type="TRANSLATION" />
-            <h4 className="text-xs font-bold text-slate-200">Regional Translation</h4>
+            <h4 className="text-xs font-bold text-slate-200">Regional Vernacular</h4>
             <p className="text-[11px] text-slate-400 leading-normal">
-              Linguistic adaptation for vernacular audiences. Clearly demarcated as non-authoritative machine translation.
+              Non-authoritative regional translations in Hindi, Odia, Bengali, and Telugu.
             </p>
           </div>
 
-          <div className="p-4 rounded-2xl bg-amber-950/20 border border-amber-500/30 space-y-2">
+          <div className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1.5">
             <ProvenanceBadge type="COMMUNITY-GENERATED • NOT OFFICIAL" />
-            <h4 className="text-xs font-bold text-slate-200">Community Relay Notes</h4>
+            <h4 className="text-xs font-bold text-slate-200">Community Ground Notes</h4>
             <p className="text-[11px] text-slate-400 leading-normal">
-              Crowdsourced ground observations. Displayed as a separate layer, never altering official advisories.
+              Volunteer observation layer displayed independently from official warnings.
             </p>
-          </div>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-slate-300">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>Strict CAP Schema Integrity</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0" />
-            <span>Audit-Logged Local Telemetry</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-            <span>Deterministic State Machine</span>
           </div>
         </div>
       </section>
 
-      {/* 14. DEMO / STATUS FOOTER */}
-      <footer className="rounded-2xl border border-slate-800 bg-slate-950/70 p-6 text-center space-y-2">
-        <div className="flex flex-wrap items-center justify-center gap-3 text-xs font-bold text-slate-300">
-          <span className="text-rose-400">ALERTSETU</span>
+      {/* 10. DEMO / STATUS FOOTER */}
+      <footer className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 text-center space-y-1.5">
+        <div className="flex flex-wrap items-center justify-center gap-2.5 text-xs font-bold text-slate-300">
+          <span className="text-rose-400 font-mono">ALERTSETU</span>
           <span className="text-slate-600">•</span>
           <span>LAST-MILE EMERGENCY INTELLIGENCE</span>
           <span className="text-slate-600">•</span>
           <span className="text-amber-400">SAMPLE / SYNTHETIC DATA</span>
         </div>
-        <p className="text-xs text-slate-500 max-w-xl mx-auto">
-          All emergency warnings and delivery telemetry shown in this interface are synthetic demonstrations designed to test resilient last-mile disaster communication infrastructure.
+        <p className="text-[11px] text-slate-500 max-w-xl mx-auto">
+          All emergency alerts and delivery receipts shown are synthetic demonstrations designed to test resilient disaster communication pipelines under low-bandwidth and offline conditions.
         </p>
       </footer>
     </div>
