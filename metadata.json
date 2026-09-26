@@ -1,0 +1,6 @@
+{
+  "name": "MAUSAM — Weather & AlertSetu Emergency Intelligence",
+  "description": "Comprehensive atmospheric intelligence platform with live weather, radar, warnings, cyclone tracking, AQI, agromet, and AlertSetu last-mile emergency communication.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
