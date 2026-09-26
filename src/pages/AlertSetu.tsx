@@ -24,6 +24,7 @@ import { AlertMap } from '../components/last-mile/AlertMap';
 import { DeliveryPanel } from '../components/last-mile/DeliveryPanel';
 import { ReceiptTracker } from '../components/last-mile/ReceiptTracker';
 import { ProvenanceBadge } from '../components/last-mile/ProvenanceBadge';
+import { MassBroadcastSection } from '../components/last-mile/MassBroadcastSection';
 
 import {
   Siren,
@@ -436,7 +437,10 @@ export function AlertSetuPage() {
         />
       </div>
 
-      {/* 7. ROW 5: LOW BANDWIDTH (LEFT) + OFFLINE RELAY (RIGHT) */}
+      {/* 7. MASS EMERGENCY BROADCAST (MULTI-CHANNEL DISPATCH & BATCH QUEUE) */}
+      <MassBroadcastSection activeAlert={activeAlert} />
+
+      {/* 8. ROW 5: LOW BANDWIDTH (LEFT) + OFFLINE RELAY (RIGHT) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Low-Bandwidth Packet Technical Compactor */}
         <section className="glass-panel rounded-3xl p-5 md:p-6" aria-labelledby="low-bw-heading">
