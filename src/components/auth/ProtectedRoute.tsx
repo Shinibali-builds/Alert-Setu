@@ -24,6 +24,12 @@ export function ProtectedRoute({
 }: ProtectedRouteProps) {
   const { user, loading, can } = useAuth();
 
+  React.useEffect(() => {
+    if (!loading && !user && window.location.pathname !== '/login') {
+      window.history.replaceState(null, '', '/login');
+    }
+  }, [loading, user]);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#030712] flex flex-col items-center justify-center p-6 text-center space-y-3">
@@ -35,7 +41,14 @@ export function ProtectedRoute({
   }
 
   if (!user) {
-    return <LoginPage />;
+    return (
+      <LoginPage
+        onSuccess={() => {
+          window.history.replaceState(null, '', '/weather');
+          window.dispatchEvent(new PopStateEvent('popstate'));
+        }}
+      />
+    );
   }
 
   // Check required permission if specified

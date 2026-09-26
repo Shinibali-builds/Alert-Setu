@@ -38,6 +38,7 @@ import { ReportsView } from './pages/ReportsView';
 import { useAuth } from './auth/AuthContext';
 import { UserRole, getRoleDisplayName } from './auth/authTypes';
 import { LoginPage } from './pages/LoginPage';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import {
   detectCurrentLocationAndStation,
   NearestStationResult,
@@ -103,7 +104,7 @@ function resolvePathToTab(path: string): NavTabId {
 }
 
 export default function App() {
-  const { user, role, loading: authLoading, logout, switchRoleDemo } = useAuth();
+  const { user, role, loading: authLoading, initError, retrySession, logout, switchRoleDemo } = useAuth();
 
   const [activeTab, setActiveTab] = useState<NavTabId>(() => {
     return resolvePathToTab(window.location.pathname);
@@ -121,11 +122,34 @@ export default function App() {
   // Sync browser URL and handle popstate (browser back/forward)
   useEffect(() => {
     const handlePopState = () => {
-      setActiveTab(resolvePathToTab(window.location.pathname));
+      const currentPath = window.location.pathname;
+      if (currentPath === '/login' && user) {
+        window.history.replaceState(null, '', '/weather');
+        setActiveTab('weather');
+      } else {
+        setActiveTab(resolvePathToTab(currentPath));
+      }
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+  }, [user]);
+
+  // Requirement 5: Unauthenticated direct access must reliably redirect to /login
+  useEffect(() => {
+    if (!authLoading && !user) {
+      if (window.location.pathname !== '/login') {
+        window.history.replaceState(null, '', '/login');
+      }
+    }
+  }, [authLoading, user]);
+
+  // Requirement 1: Successful login must reliably redirect to the existing MAUSAM dashboard
+  useEffect(() => {
+    if (user && window.location.pathname === '/login') {
+      window.history.replaceState(null, '', '/weather');
+      setActiveTab('weather');
+    }
+  }, [user]);
 
   // Keyboard navigation & accessibility for Station Dropdown (Escape key dismiss)
   useEffect(() => {
@@ -151,6 +175,13 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  // Requirement 4: Logout must reliably return to /login
+  const handleLogout = async () => {
+    await logout();
+    window.history.replaceState(null, '', '/login');
+    setMobileMenuOpen(false);
+  };
+
   // 'Use my current location' handler
   const handleUseCurrentLocation = async () => {
     setLocationDetecting(true);
@@ -167,28 +198,53 @@ export default function App() {
     }
   };
 
-  // 1. Initial Authentication Loading State
+  // 1. Initial Authentication Loading State (Requirements 6 & 7)
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-[#030712] flex flex-col items-center justify-center p-6 text-center space-y-3">
-        <div className="w-10 h-10 border-3 border-rose-500/30 border-t-rose-500 rounded-full animate-spin" />
-        <div className="text-sm font-bold text-slate-300">
-          Authenticating MAUSAM &amp; AlertSetu Portal...
+      <div className="min-h-screen bg-[#030712] flex flex-col items-center justify-center p-6 text-center space-y-4">
+        <div className="w-12 h-12 border-3 border-rose-500/30 border-t-rose-500 rounded-full animate-spin shadow-lg shadow-rose-950/50" />
+        <div className="space-y-1">
+          <div className="text-base font-bold text-slate-100">
+            MAUSAM &amp; AlertSetu Atmospheric Portal
+          </div>
+          <div className="text-xs text-slate-400 font-mono">
+            Verifying server-side HTTP-only session credentials...
+          </div>
         </div>
-        <div className="text-xs text-slate-500 font-mono">
-          Verifying server-side HTTP-only session credentials
-        </div>
+
+        {initError && (
+          <div className="max-w-md p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 space-y-3 mt-2">
+            <div>{initError}</div>
+            <div className="flex gap-2 justify-center">
+              <button
+                type="button"
+                onClick={retrySession}
+                className="px-3.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 font-bold"
+              >
+                Retry Gateway Verification
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
-  // 2. Unauthenticated Gate: Prompt for Login
+  // 2. Unauthenticated Gate: Prompt for Login (Requirements 1, 4, 5)
   if (!user) {
-    return <LoginPage />;
+    return (
+      <LoginPage
+        onSuccess={() => {
+          window.history.replaceState(null, '', '/weather');
+          setActiveTab('weather');
+        }}
+      />
+    );
   }
 
   return (
-    <div className="min-h-screen bg-[#030712] text-slate-100 flex flex-col selection:bg-rose-500/30 selection:text-rose-200">
+    <ErrorBoundary>
+      <div className="min-h-screen bg-[#030712] text-slate-100 flex flex-col selection:bg-rose-500/30 selection:text-rose-200">
       {/* Top Alert Ticker */}
       <div className="bg-gradient-to-r from-rose-950/80 via-slate-900 to-rose-950/80 border-b border-rose-500/30 px-4 py-1.5 text-xs text-slate-300">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
@@ -433,7 +489,7 @@ export default function App() {
             {/* Sign Out Action Button */}
             <button
               type="button"
-              onClick={logout}
+              onClick={handleLogout}
               title={`Sign Out (${user.name})`}
               className="p-2 sm:px-2.5 sm:py-2 rounded-xl border border-slate-800 bg-[#0b1220] hover:bg-rose-500/10 hover:border-rose-500/30 text-slate-400 hover:text-rose-300 transition-colors"
               aria-label="Sign Out of Portal"
@@ -572,5 +628,6 @@ export default function App() {
         </div>
       </footer>
     </div>
+    </ErrorBoundary>
   );
 }

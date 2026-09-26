@@ -188,11 +188,18 @@ auditLogStore.push(SEED_BROADCAST);
 
 // --- Session Middleware ---
 function authMiddleware(req: Request, res: Response, next: NextFunction) {
-  const sessionId = req.cookies['mausam_session'];
+  const authHeader = req.headers['authorization'];
+  const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+  const xSessionToken = req.headers['x-session-token'] as string | undefined;
+  const cookieToken = req.cookies ? req.cookies['mausam_session'] : undefined;
+
+  const sessionId = bearerToken || xSessionToken || cookieToken;
   if (sessionId && activeSessions.has(sessionId)) {
     (req as any).user = activeSessions.get(sessionId);
+    (req as any).sessionId = sessionId;
   } else {
     (req as any).user = null;
+    (req as any).sessionId = null;
   }
   next();
 }
@@ -246,24 +253,30 @@ async function startServer() {
     const sessionToken = crypto.randomBytes(32).toString('hex');
     activeSessions.set(sessionToken, matchedAccount.user);
 
-    // Set secure HTTP-Only cookie
+    // Set secure HTTP-Only cookie with SameSite=None and Secure=true for cross-origin/iframe environments
     res.cookie('mausam_session', sessionToken, {
       httpOnly: true,
-      sameSite: 'lax',
+      secure: true,
+      sameSite: 'none',
       path: '/',
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
-    return res.json({ success: true, user: matchedAccount.user });
+    return res.json({ success: true, token: sessionToken, user: matchedAccount.user });
   });
 
   // POST /api/auth/logout - Clear session cookie and memory store
   app.post('/api/auth/logout', (req: Request, res: Response) => {
-    const sessionId = req.cookies['mausam_session'];
-    if (sessionId) {
+    const authHeader = req.headers['authorization'];
+    const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+    const xSessionToken = req.headers['x-session-token'] as string | undefined;
+    const cookieToken = req.cookies ? req.cookies['mausam_session'] : undefined;
+    const sessionId = bearerToken || xSessionToken || cookieToken;
+
+    if (sessionId && activeSessions.has(sessionId)) {
       activeSessions.delete(sessionId);
     }
-    res.clearCookie('mausam_session', { path: '/' });
+    res.clearCookie('mausam_session', { path: '/', sameSite: 'none', secure: true });
     res.json({ success: true });
   });
 
@@ -291,17 +304,24 @@ async function startServer() {
     }
 
     const matched = AUTHORIZED_ACCOUNTS[targetEmail];
-    const sessionToken = crypto.randomBytes(32).toString('hex');
+    const authHeader = req.headers['authorization'];
+    const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+    const xSessionToken = req.headers['x-session-token'] as string | undefined;
+    const cookieToken = req.cookies ? req.cookies['mausam_session'] : undefined;
+    const existingToken = bearerToken || xSessionToken || cookieToken;
+
+    const sessionToken = existingToken || crypto.randomBytes(32).toString('hex');
     activeSessions.set(sessionToken, matched.user);
 
     res.cookie('mausam_session', sessionToken, {
       httpOnly: true,
-      sameSite: 'lax',
+      secure: true,
+      sameSite: 'none',
       path: '/',
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
-    return res.json({ success: true, user: matched.user });
+    return res.json({ success: true, token: sessionToken, user: matched.user });
   });
 
   // -------------------------------------------------------------

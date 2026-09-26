@@ -31,6 +31,15 @@ export function LoginPage({ onSuccess }: LoginPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const handleLoginSuccess = () => {
+    if (onSuccess) {
+      onSuccess();
+    } else {
+      window.history.replaceState(null, '', '/weather');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim()) {
@@ -45,7 +54,7 @@ export function LoginPage({ onSuccess }: LoginPageProps) {
     setLoading(false);
 
     if (res.success) {
-      if (onSuccess) onSuccess();
+      handleLoginSuccess();
     } else {
       setError(res.error || 'Invalid credentials. Please verify your official account.');
     }
@@ -61,7 +70,7 @@ export function LoginPage({ onSuccess }: LoginPageProps) {
     setLoading(false);
 
     if (res.success) {
-      if (onSuccess) onSuccess();
+      handleLoginSuccess();
     } else {
       setError(res.error || 'Demo role authentication failed.');
     }
