@@ -149,7 +149,7 @@ export default function App() {
       </div>
 
       {/* Main Atmospheric Navigation Header */}
-      <header className="sticky top-0 z-40 glass-panel border-b border-white/10 backdrop-blur-xl">
+      <header className="sticky top-0 z-40 glass-panel border-b border-white/10 backdrop-blur-xl overflow-visible isolate">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 sm:h-20 flex items-center justify-between gap-4">
           {/* Brand Logo */}
           <div className="flex items-center gap-3">
@@ -174,7 +174,7 @@ export default function App() {
                   </span>
                 </div>
                 <div className="text-[10px] font-mono text-slate-400 uppercase tracking-widest hidden sm:block">
-                  Atmospheric Intelligence & AlertSetu
+                  Atmospheric Intelligence • AlertSetu
                 </div>
               </div>
             </button>
@@ -212,14 +212,30 @@ export default function App() {
             })}
           </nav>
 
-          {/* Header Controls: City Selector & Mobile Toggle */}
-          <div className="flex items-center gap-3">
-            {/* City Selector Dropdown */}
+          {/* Header Controls: Role Selector, City Selector & Mobile Toggle */}
+          <div className="flex items-center gap-2.5">
+            {/* User Role Selector */}
+            <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-slate-800 bg-[#0b1220] text-xs">
+              <Shield className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <select
+                aria-label="Active Authority Role"
+                defaultValue="District Authority"
+                className="bg-transparent text-slate-300 font-semibold focus:outline-none text-xs cursor-pointer"
+              >
+                <option value="Public User" className="bg-[#0b1220] text-slate-200">Public User</option>
+                <option value="Field Operator" className="bg-[#0b1220] text-slate-200">Field Operator</option>
+                <option value="District Authority" className="bg-[#0b1220] text-slate-200">District Authority</option>
+                <option value="State Authority" className="bg-[#0b1220] text-slate-200">State Authority</option>
+                <option value="System Admin" className="bg-[#0b1220] text-slate-200">System Admin</option>
+              </select>
+            </div>
+
+            {/* City Selector Dropdown with fully opaque popover */}
             <div className="relative">
               <button
                 type="button"
                 onClick={() => setCityDropdownOpen((o) => !o)}
-                className="flex items-center gap-2 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl border border-slate-800 bg-slate-900/80 hover:bg-slate-850 text-xs font-semibold text-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/40"
+                className="flex items-center gap-2 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl border border-slate-700/80 bg-[#0b1220] hover:bg-[#111c33] text-xs font-semibold text-slate-200 focus:outline-none focus:ring-2 focus:ring-rose-500/40 shadow-sm"
                 aria-expanded={cityDropdownOpen}
               >
                 <MapPin className="w-3.5 h-3.5 text-rose-400 shrink-0" />
@@ -228,34 +244,43 @@ export default function App() {
               </button>
 
               {cityDropdownOpen && (
-                <div className="absolute right-0 mt-2 w-56 rounded-2xl glass-panel border border-slate-700/80 shadow-2xl p-2 z-50 animate-in fade-in zoom-in-95">
-                  <div className="px-3 py-1.5 text-[10px] font-mono font-bold uppercase text-slate-400 border-b border-slate-800">
-                    Select Meteorological Station:
+                <>
+                  {/* Backdrop to close dropdown on outside click */}
+                  <div
+                    className="fixed inset-0 z-[95]"
+                    onClick={() => setCityDropdownOpen(false)}
+                    aria-hidden="true"
+                  />
+                  <div className="absolute right-0 mt-2 w-64 rounded-2xl bg-[#0b1220] border border-slate-700 shadow-2xl p-2 z-[100] isolate">
+                    <div className="px-3 py-2 text-[10px] font-mono font-bold uppercase text-slate-400 border-b border-slate-800 flex items-center justify-between">
+                      <span>Select Weather Station:</span>
+                      <span className="text-[9px] text-rose-400 font-bold">LIVE RADAR</span>
+                    </div>
+                    <div className="space-y-1 mt-1.5 max-h-72 overflow-y-auto">
+                      {MAUSAM_CITIES.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => {
+                            setCurrentCity(c);
+                            setCityDropdownOpen(false);
+                          }}
+                          className={`w-full text-left px-3 py-2 rounded-xl text-xs flex items-center justify-between transition-colors ${
+                            currentCity.id === c.id
+                              ? 'bg-rose-500/20 text-rose-300 font-bold border border-rose-500/30'
+                              : 'text-slate-300 hover:bg-[#141f38]'
+                          }`}
+                        >
+                          <div>
+                            <div className="font-semibold text-white">{c.name}</div>
+                            <div className="text-[10px] text-slate-400">{c.state} • {c.condition}</div>
+                          </div>
+                          <span className="font-mono text-xs font-bold text-rose-300">{c.temp}°C</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <div className="space-y-1 mt-1">
-                    {MAUSAM_CITIES.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => {
-                          setCurrentCity(c);
-                          setCityDropdownOpen(false);
-                        }}
-                        className={`w-full text-left px-3 py-2 rounded-xl text-xs flex items-center justify-between transition-colors ${
-                          currentCity.id === c.id
-                            ? 'bg-rose-500/20 text-rose-300 font-bold'
-                            : 'text-slate-300 hover:bg-white/5'
-                        }`}
-                      >
-                        <div>
-                          <div>{c.name}</div>
-                          <div className="text-[10px] text-slate-500">{c.state}</div>
-                        </div>
-                        <span className="font-mono text-xs">{c.temp}°C</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                </>
               )}
             </div>
 

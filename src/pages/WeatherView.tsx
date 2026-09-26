@@ -52,7 +52,7 @@ export const WeatherView: React.FC<WeatherViewProps> = ({ currentCity, onNavigat
               onClick={onNavigateToAlertSetu}
               className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-rose-500 hover:bg-rose-400 text-white transition-all shadow-md shrink-0"
             >
-              <span>View in AlertSetu Last-Mile</span>
+              <span>Open in AlertSetu</span>
               <ArrowUpRight className="w-4 h-4" />
             </button>
           )}
