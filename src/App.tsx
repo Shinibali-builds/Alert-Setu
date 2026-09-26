@@ -214,7 +214,7 @@ export default function App() {
 
         {initError && (
           <div className="max-w-md p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 space-y-3 mt-2">
-            <div>{initError}</div>
+            <div>{String(initError)}</div>
             <div className="flex gap-2 justify-center">
               <button
                 type="button"
@@ -423,7 +423,7 @@ export default function App() {
                     {locationError && (
                       <div className="mb-2 p-2 rounded-xl bg-rose-500/10 border border-rose-500/30 text-[11px] text-rose-300 flex items-start gap-1.5">
                         <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0 mt-0.5" />
-                        <div className="leading-tight">{locationError}</div>
+                        <div className="leading-tight">{String(locationError)}</div>
                       </div>
                     )}
 

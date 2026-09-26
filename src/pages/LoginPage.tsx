@@ -40,6 +40,20 @@ export function LoginPage({ onSuccess }: LoginPageProps) {
     }
   };
 
+  function toSafeErrorMessage(err: unknown): string {
+    if (!err) return 'Authentication failed. Please verify your official account.';
+    if (typeof err === 'string') return err;
+    if (typeof err === 'object') {
+      const anyErr = err as Record<string, any>;
+      if (typeof anyErr.message === 'string') return anyErr.message;
+      if (typeof anyErr.error === 'string') return anyErr.error;
+      if (anyErr.error && typeof anyErr.error === 'object' && typeof anyErr.error.message === 'string') {
+        return anyErr.error.message;
+      }
+    }
+    return 'Authentication failed. Please verify your official account.';
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim()) {
@@ -56,7 +70,7 @@ export function LoginPage({ onSuccess }: LoginPageProps) {
     if (res.success) {
       handleLoginSuccess();
     } else {
-      setError(res.error || 'Invalid credentials. Please verify your official account.');
+      setError(toSafeErrorMessage(res.error));
     }
   };
 
@@ -72,7 +86,7 @@ export function LoginPage({ onSuccess }: LoginPageProps) {
     if (res.success) {
       handleLoginSuccess();
     } else {
-      setError(res.error || 'Demo role authentication failed.');
+      setError(toSafeErrorMessage(res.error));
     }
   };
 
@@ -172,7 +186,7 @@ export function LoginPage({ onSuccess }: LoginPageProps) {
           {error && (
             <div className="mb-5 p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-start gap-2.5 text-xs text-rose-300">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
-              <div className="flex-1 font-medium">{error}</div>
+              <div className="flex-1 font-medium">{String(error)}</div>
             </div>
           )}
 

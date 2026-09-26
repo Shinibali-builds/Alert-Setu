@@ -258,7 +258,7 @@ export function MassBroadcastSection({ activeAlert }: MassBroadcastSectionProps)
       {errorMessage && (
         <div className="mb-4 p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
-          <span>{errorMessage}</span>
+          <span>{String(errorMessage)}</span>
         </div>
       )}
 
